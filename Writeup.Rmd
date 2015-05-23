@@ -1,0 +1,131 @@
+---
+title: "Weight Lifting Exercise Modeling"
+author: "James Stevens"
+date: "May 20, 2015"
+output: html_document
+---
+```{r load_data,echo=FALSE, message=FALSE, warning=FALSE}
+setwd("~/datasciencecoursera/machineLearn/project")
+library(caret)
+library(plyr)
+library(dplyr)
+mltrain <- read.csv("pml-training.csv", header=TRUE)
+mltrain <- tbl_df(mltrain)
+set.seed(43231)
+inTrain <- createDataPartition(y=mltrain$classe,p=0.75,list=FALSE)
+training <- mltrain[inTrain,]
+testing <- mltrain[-inTrain,]
+
+starts_with_all <- function(df,vars){
+        temp_df <- select(df,starts_with(vars[1]))
+        var2 <- vars[-1]
+        for(i in var2){
+                temp_df <- cbind(temp_df,select(df,starts_with(i)))
+        }
+        temp_df
+}
+
+vars <- c("yaw","roll","pitch","gyros_","accel_","magnet","classe")
+new_train <- starts_with_all(training,vars)
+new_test <- starts_with_all(testing,vars)
+```
+###Overview:  
+The goal of this project is to create a model that predicts the manner in which an exercise was performed based on data from sensors placed on the body of participants and equipment while the exercise was being performed. The manner in which the exercise was performed is classified into five groups. One group representing the exercise performed correctly and the other four groups representing different types of errors. We have chosen a **Generalized Boosted regression model** (gbm) because tree based models are good at classification, and with the addition of boosting we increase the accuracy while lowering the variance of the final model.  
+
+####The Dataset:
+The data set comes from the [Qualitative Activity Recognition of Weight Lifting Exercises](http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises) study. The data set used for this paper is a sub-set of the original data set and can be found [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv). This data set consists of 19,622 rows of 160 variables. The **'classe'** variable is the outcome we are trying to predict. It is a factor variable with five levels that classify how the exercise was performed.  
+```{r show_classe,echo=FALSE}
+summary(mltrain$classe)
+```
+
+The remaining 159 variables are available to us as predictors for our model. An examination of these variables reveals that there are several variables with a high percentage of NA values. In addition to this there are several variables that will not be useful for predicting the outcome (i.e. variables such as the name of the participant, several time stamp related variables.).  
+
+Normally, with variables containing NA values, imputation would be attempted. However, in this case, the variables have such a high percentage of NA values that imputation would not yield usable results. Because of this we decided not to include these columns as predictors for our model.  
+
+The balance of the variables fall into four categories: **belt, arm, forearm, and dumbell**. These four categories indicate where motion sensors have been placed on the participants/equipment. Within these four categories there are six sub categories that indicate the type of measurement that was recorded: **yaw, roll, pitch, gyros_, accel_, and manget_**. All fields deemed necessary for prediction had names starting with one of the six sub-categories mentioned above. All columns starting with these six sub-categories, plus the outcome variable **'classe'** were selected for use in the model. The total number of variables after selection was 49. 
+
+The selected data was then split into a training (%75) and a test (%25) set. 
+```{r show_part,eval=FALSE,tidy=TRUE}
+mltrain <- read.csv("pml-training.csv", header=TRUE)
+mltrain <- tbl_df(mltrain)
+set.seed(43231)
+inTrain <- createDataPartition(y=mltrain$classe,p=0.75,list=FALSE)
+training <- mltrain[inTrain,]
+testing <- mltrain[-inTrain,]
+```
+
+####The Model:  
+The model we chose for this project was Generalized Boosted Regression Modeling (gbm). We used repeated five fold cross-validation with five repeats which means that five separate 5-fold cross-validations were used.  
+```{r fit_model,eval=FALSE}
+fitControl <- trainControl(## 5-fold CV
+        method = "repeatedcv",
+        number = 5,
+        repeats = 5)
+
+gbmFit5 <- train(classe ~ .,data=new_train,
+                 method = "gbm",
+                 trControl = fitControl,
+                 verbose = FALSE)
+```
+  
+The *gbm* method uses **cross-validation** while building the model. In this case we are using k-fold cross-validation. This means that the training data is divided into k parts with one of those parts being held for testing while the rest of the parts are combined and used as the training data. In the first pass the *first* of k parts would be used for testing, in the second pass the *second* part would be used as the testing, and so on until all the k parts had been used as testing data against the rest of the k-1 parts. The result of this method is that all observations are used for both testing and training of the model. In addition to the 5-fold cross-validation, we have also selected five repeats. This means than the entire 5-fold cross-validation is repeated five times.  
+
+**Classification trees** are used for the prediction model. The classification tree works by finding values of predictors that can be used to classify observations in to one of the available output categories. At each 'node' of the tree, a *specific* value of a *specific* predictor variable is split into two 'branches'. Each of these branches is then evaluated and split again if possible. At the end of each branch is a 'leaf' which represents one of the available output classes.  
+
+**Boosting** is used to improve the performance of the classification trees. Boosting works by looking for the errors in the model (i.e. cases where the algorithm made the wrong classification). It then gives a higher weight to these observations so that then next iteration of the model will work harder to classify the mistakes of the previous iteration.  
+
+There two important parameters when using *gbm*. The first is the **interaction depth** and the second is the **number of trees**. The *interaction depth* is the number of levels of nodes created in the tree. For example if a predictor is split into two branches 'a' and 'b', that is one level or interaction depth. If the 'a' branch is then split into 'c' and 'd', that is a second level or interaction depth. *Number of trees* is the number of separate tree based models that were created. For example, if the interaction depth is one, and the number of trees is 50 then each of the 50 trees would pick a *single* predictor and a *value* of that predictor to classify each observation. The results of all 50 of these trees would then be averaged to make the final prediction. The *gbm* model tests different levels of interaction depth and different numbers of trees. The combination of interaction depth and number of trees that results in the highest accuracy (correctly predicted outcomes) will be selected as the final model. 
+
+After our final model is created we need to test it to see how it will perform on future data. We are interested in how accurately the model can classify observations. One benchmark for this is the **error rate**. The error rate is the percentage of incorrect classifications. We can look at the error rate of our model on the training data:  
+```{r ins_error,echo=FALSE, warning=FALSE,message=FALSE}
+load("gbmFit5.RData")
+inSample <- confusionMatrix(new_train$classe,predict(gbmFit5,new_train))
+iser <- inSample$table
+diag(iser) <- 0
+iser_percent <- sum(iser) / sum(inSample$table)
+names(iser_percent) <- "In Sample Error Rate"
+iser_percent
+```
+However, because we are using the same data to test that we built our model on, this error rate will tend to be optimistic.  
+
+In order to get a better idea how our model will perform on future data we need to get the error rate from the original testing data that we created using the *createDataPartition* function:    
+```{r oos_error,echo=FALSE,collapse=TRUE}
+OOSample <- confusionMatrix(new_test$classe,predict(gbmFit5,new_test))
+ooser <- OOSample$table
+diag(ooser) <- 0
+ooser_percent <- sum(ooser) / sum(OOSample$table)
+names(ooser_percent) <- "Out Of Sample Error Rate"
+ooser_percent
+OOSample$overall[1]
+OOSample$table
+```
+  
+We see, as expected, that our *out of sample error rate* is higher than our *in sample error rate*. The table above shows the actual class of the observation vs. the predicted class. The overall accuracy of the model is shown to be 97%. The plot below (left hand side) shows the boosting iterations that were tested to select the best model. We can see from this plot that an interaction depth of three with 150 trees yielded the highest accuracy (green line). The table on the right below shows the percentage of accuracy for each of the classification categories. 
+ 
+```{r confusion_table,echo=FALSE,warning=FALSE,message=FALSE,fig.width=12}
+library(gridExtra)
+# create normalized confusion matrix
+ncmt <- OOSample$table / rowSums(OOSample$table)
+
+ncmt_df <- as.data.frame(ncmt)
+
+ncmt_df$Prediction <- with(ncmt_df, factor(Prediction, levels = rev(levels(Prediction))))
+library(grDevices)
+library(RColorBrewer)
+cols <- brewer.pal(3,"YlOrRd")
+pal <- colorRampPalette(cols)
+
+p <- ggplot(ncmt_df, aes(x=Reference,y=Prediction)) +
+        geom_tile(aes(fill = Freq)) +
+        geom_text(aes(fill=ncmt_df$Freq,label=round(ncmt_df$Freq,3))) +
+        scale_fill_gradientn(colours = pal(10))
+
+boosting <- plot(gbmFit5)
+grid.arrange(boosting,p,ncol=2)
+```
+        
+
+
+
+
+
